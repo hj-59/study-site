@@ -22,10 +22,10 @@
 
   const TABS = [
     { id: "lectures", label: "교안", key: "lectures", type: "pdf" },
-    { id: "textbooks", label: "교재", key: "textbooks", type: "pdf" },
     { id: "ai", label: "AI용 교안", key: "aiNotes", type: "md" },
     { id: "solutions", label: "문제 풀이", key: "solutions", type: "problem" },
     { id: "predictions", label: "예상 문제", key: "predictions", type: "problem" },
+    { id: "memorize", label: "시험용 암기", key: "memorize", type: "md" },
   ];
 
   /* ---------------- 유틸 ---------------- */
@@ -617,7 +617,7 @@
           Object.assign(sub, { name, desc: v.desc.trim(), id });
           if (moved && location.hash.includes(`/${enc(sem.id)}/`)) location.hash = `#/${enc(sem.id)}/${enc(id)}/lectures`;
         } else {
-          subs.push({ id, name, desc: v.desc.trim(), lectures: [], textbooks: [], aiNotes: [], solutions: [], predictions: [] });
+          subs.push({ id, name, desc: v.desc.trim(), lectures: [], aiNotes: [], solutions: [], predictions: [], memorize: [] });
         }
       },
     });
@@ -653,7 +653,7 @@
 
     if (tab.type === "md") {
       openForm({
-        title: `AI용 교안 ${it ? "수정" : "추가"}`,
+        title: `${tab.label} ${it ? "수정" : "추가"}`,
         values: it || {},
         preview: true,
         fields: [
