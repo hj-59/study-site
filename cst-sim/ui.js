@@ -316,6 +316,12 @@ function startSim() {
     t += 60; const k = Math.min(1, t / tot); bar.style.width = (k * 100) + '%'; lab.textContent = stages[Math.min(3, Math.floor(k * 4))] + ' … ' + Math.round(k * 100) + '%';
     if (k >= 1) {
       clearInterval(iv); running = false; lab.textContent = 'Solver finished';
+      if (r.gradeOnly) {
+        S.ran = true; save();
+        msg(r.allOk ? 'ok' : 'warn', '<b>형상 점검 결과</b> (이 예제는 결과 그래프 없이 형상만 채점합니다. S11·AR·패턴은 실제 CST에서 확인하세요.)');
+        r.rep.forEach(([ty, tx]) => msg(ty, tx));
+        clearTimeout(anTimer); lastA = analyze(); renderMission(); return;
+      }
       S.results = { s11: r.s11, gain: r.gain, ar: r.ar, mons: r.mons, lossless: r.lossless, f: r.f, d: r.d }; S.sweep = null;
       msg('ok', 'Solver finished successfully.');
       msg('info', '<b>모델 점검 결과</b> (연습용 모의: 실제 CST 계산이 아니라 정답 형상과의 일치도로 결과를 만듭니다)');
@@ -436,7 +442,7 @@ function node(key, label, kids, opts = {}) {
 function renderTree() {
   const sw = c => `<span class="sw" style="background:${c}"></span>`;
   const comps = [...new Set(S.solids.map(s => s.comp))];
-  const compNodes = comps.map(c => node('c:' + c, esc(c), S.solids.filter(s => s.comp === c).map(s => node('s:' + s.id, esc(s.name), null, { sel: U.sel.includes(s.id), icon: sw(getMat(s.mat).color), attr: `data-sid="${s.id}"` }))));
+  const compNodes = comps.map(c => node('c:' + c, esc(c), S.solids.filter(s => s.comp === c).map(s => node('s:' + s.id, esc(s.name) + (s.hidden ? ' <i style="color:#999">(hidden)</i>' : ''), null, { sel: U.sel.includes(s.id), icon: sw(getMat(s.mat).color), attr: `data-sid="${s.id}"` }))));
   const R = S.results;
   const res = R ? [node('sp', 'S-Parameters', [node('r:s11', 'S1,1', null, { attr: 'data-r="s11"' })].concat(S.sweep ? [node('r:sweep', `S1,1 (Par. Sweep: ${esc(S.sweep.name)})`, null, { attr: 'data-r="sweep"' })] : [])), node('r:vswr', 'VSWR', null, { attr: 'data-r="vswr"' })] : [];
   const tbl = R && S.tpls.length ? S.tpls.map((t, i) => node('r:tpl' + i, `${esc(t.q)} (θ=${t.th}, φ=${t.ph})`, null, { attr: `data-r="tpl${i}"` })) : [];
@@ -470,7 +476,7 @@ document.addEventListener('contextmenu', e => {
   const tn = e.target.closest('#tree .tn'); if (!tn) return; e.preventDefault();
   let items = [];
   if (tn.dataset.sid) { const id = tn.dataset.sid; if (!U.sel.includes(id)) { U.sel = [id]; renderTree(); draw(); }
-    items = [['Transform…', () => dlgTransform()], ['Boolean Add', () => startBool('add')], ['Boolean Subtract', () => startBool('sub')], ['Change Material…', () => dlgChMat()], ['Local Mesh Properties…', () => dlgLocalMesh(id)], ['Edit (좌표 수정)…', () => editSolid(id)], ['Rename…', () => renameSolid(id)], ['Delete', () => action('delete')]]; }
+    items = [['Transform…', () => dlgTransform()], ['Boolean Add', () => startBool('add')], ['Boolean Subtract', () => startBool('sub')], ['Change Material…', () => dlgChMat()], ['Local Mesh Properties…', () => dlgLocalMesh(id)], ['Edit (좌표 수정)…', () => editSolid(id)], ['Rename…', () => renameSolid(id)], [S.solids.find(q => q.id === id).hidden ? 'Show' : 'Hide', () => { const so = S.solids.find(q => q.id === id); so.hidden = !so.hidden; save(); renderTree(); draw(); }], ['Delete', () => action('delete')]]; }
   else if (tn.dataset.port) items = [['Edit…', () => dlgPort(+tn.dataset.port)], ['Delete', () => modify(() => S.ports.splice(+tn.dataset.port, 1))]];
   else if (tn.dataset.mon) items = [['Delete', () => modify(() => { S.monitors = S.monitors.filter(f => f !== +tn.dataset.mon); }, false)]];
   else return;
@@ -525,7 +531,7 @@ function renderMission() {
       body += `<details class="live"><summary>지금 모델의 정답 일치도</summary><table>${rows}</table><p class="hint">객체의 z 위치가 좌표 약속과 같아야 비교됩니다.</p></details>`;
     }
   } else {
-    body = `<div class="paper"><p class="pt">${esc(pj.paper)}</p><table class="ptab2"><tr><th>Parameter</th><th>Value (mm)</th><th></th></tr>${pj.params.map(([n, v, d]) => `<tr><td>${n}</td><td>${v}</td><td>${d}</td></tr>`).join('')}</table>${pj.sub ? `<p>기판: <b>${pj.sub.matHint}</b>${pj.dr ? ', DR: εr = 10' : ''}</p>` : ''}${window.NO_SLIDES ? '<p class="hint">교안 슬라이드 그림은 공개용 버전에서 뺐습니다. 교안 PDF의 Ch.7을 같이 보세요.</p>' : `<div class="gal">${pj.slides.map(([f, c]) => `<figure><img src="img/${f}.jpg" alt="${esc(c)}" data-zoom><figcaption>${c}</figcaption></figure>`).join('')}</div>`}</div>`;
+    body = `<div class="paper"><p class="pt">${esc(pj.paper)}</p><table class="ptab2"><tr><th>Parameter</th><th>Value (mm)</th><th></th></tr>${pj.params.map(([n, v, d]) => `<tr><td>${n}</td><td>${v}</td><td>${d}</td></tr>`).join('')}</table>${pj.sub ? `<p>기판: <b>${pj.sub.matHint}</b>${pj.dr ? ', DR: εr = 10' : ''}</p>` : ''}${window.NO_SLIDES ? '<p class="hint">교안·과제 그림은 공개용 버전에서 뺐습니다. 교안 Ch.7 또는 과제 PDF를 같이 보세요.</p>' : `<div class="gal">${pj.slides.map(([f, c]) => `<figure><img src="img/${f}.jpg" alt="${esc(c)}" data-zoom><figcaption>${c}</figcaption></figure>`).join('')}</div>`}</div>`;
   }
   $('#mission').innerHTML = head + `<div class="mb">${body}</div>`;
 }
@@ -583,6 +589,31 @@ function buildAnswer() {
     const m1 = add('MS1', 'PEC', ['-g/2', '-g/2+lm1', '-wm1/2', 'wm1/2', '-t', '-t']), m2 = add('MS2', 'PEC', ['-g/2+lm1', '-g/2+lm1+lm2', '-wm2/2', 'wm2/2', '-t', '-t']); unite(m1, m2);
     S.ports.push({ normal: 'x', dir: 1, pos: '-g/2', u: ['-wm1/2', 'wm1/2'], ue: ['5*t', '5*t'], v: ['-t', '-t'], ve: ['5*t', 't'] });
     for (let x = 2; x <= 3.8 + 1e-9; x += 0.1) S.monitors.push(+x.toFixed(4));
+  } else if (pj.key === 'tp') {
+    S.freq = [14, 20]; S.mats.push('Taconic TLY-5 (lossy)', 'PTFE (lossy)');
+    const T = 'Taconic TLY-5 (lossy)';
+    add('Sub_Lower', T, ['-Wsub/2', 'Wsub/2', '-Wsub/2', 'Wsub/2', '0', 'h']); add('Sub_Upper', T, ['-Wsub/2', 'Wsub/2', '-Wsub/2', 'Wsub/2', 'h', '2*h']);
+    const cylA = (name, mat, e) => { const id = 's' + S.nextId++; const o = { id, name, comp: 'component1', mat, node: { t: 'cyl', e: { ro: e[0], ri: e[1], xc: e[2], yc: e[3], z0: e[4], z1: e[5] }, tf: [] } }; S.solids.push(o); return o; };
+    const g = add('Ground', 'PEC', ['-Wsub/2', 'Wsub/2', '-Wsub/2', 'Wsub/2', '0', '0']); subtract(g, cylA('GndHole', 'PEC', ['r_d', '0', 'fx', 'fy', '-0.1', '0.1']));
+    cylA('Coax_Outer', 'PEC', ['r_o', 'r_d', 'fx', 'fy', '-lc', '0']); cylA('Coax_Diel', 'PTFE (lossy)', ['r_d', 'r_pin', 'fx', 'fy', '-lc', '0']); cylA('Pin', 'PEC', ['r_pin', '0', 'fx', 'fy', '-lc', 'h']);
+    const rad = add('Rad', 'PEC', ['-W4/2', 'W4/2', '-W4/2', 'W4/2', 'h', 'h']); unite(rad, add('Tab', 'PEC', ['W4/2', 'W4/2+W6', '-l4/2', 'l4/2', 'h', 'h']));
+    subtract(rad, add('Slot1', 'PEC', ['W4/2-W5', 'W4/2', 'l4/2', 'l3/2', 'h', 'h']), add('Slot2', 'PEC', ['W4/2-W5', 'W4/2', '-l3/2', '-l4/2', 'h', 'h']), add('Hole', 'PEC', ['-Wr/2', 'Wr/2', '-Wr/2', 'Wr/2', 'h', 'h']));
+    const c1 = add('Cut1', 'PEC', ['W4/2-W2', 'W4/2-W2+Wk', 'W4/2', 'W4/2+0.5', 'h', 'h']); applyTf(c1.node, { k: 'rot', a: '-atn(l1/W2)*180/pi', c: ['W4/2-W2', 'W4/2'], n: 1 });
+    const c2 = add('Cut2', 'PEC', ['-W4/2', '-W4/2+W7*sqrt(2)', '-W4/2+W7-0.5', '-W4/2+W7', 'h', 'h']); applyTf(c2.node, { k: 'rot', a: '-45', c: ['-W4/2', '-W4/2+W7'], n: 1 });
+    subtract(rad, c1, c2);
+    const par = add('Par', 'PEC', ['-Wp/2', 'Wp/2', '-Wp/2', 'Wp/2', '2*h', '2*h']);
+    const pc1 = add('PCut1', 'PEC', ['Wp/2-Wpc', 'Wp/2-Wpc+Wpc*sqrt(2)', 'Wp/2', 'Wp/2+0.5', '2*h', '2*h']); applyTf(pc1.node, { k: 'rot', a: '-45', c: ['Wp/2-Wpc', 'Wp/2'], n: 1 });
+    const pc2 = copy(pc1, { k: 'rot', a: '180', c: ['0', '0'] }, 1, 'PCut1_1'); subtract(par, pc1, pc2);
+    for (const s2 of [rad, par]) applyTf(s2.node, { k: 'rot', a: '-45', c: ['0', '0'], n: 1 });
+    const v0 = cylA('Via', 'PEC', ['via_r', '0', '-6*via_p', '6*via_p', '0', '2*h']);
+    const row = [v0]; for (let k = 1; k <= 12; k++) row.push(copy(v0, { k: 'tr', v: ['via_p', '0', '0'] }, k, 'Via_' + k));
+    row.forEach((v, i) => copy(v, { k: 'tr', v: ['0', '-12*via_p', '0'] }, 1, 'ViaB_' + i));
+    const l0 = cylA('ViaL', 'PEC', ['via_r', '0', '-6*via_p', '5*via_p', '0', '2*h']);
+    const col = [l0]; for (let k = 1; k <= 10; k++) col.push(copy(l0, { k: 'tr', v: ['0', '-via_p', '0'] }, k, 'ViaL_' + k));
+    col.forEach((v, i) => copy(v, { k: 'tr', v: ['12*via_p', '0', '0'] }, 1, 'ViaR_' + i));
+    S.ports.push({ normal: 'z', dir: 1, pos: '-lc', u: ['fx-r_o', 'fx+r_o'], ue: ['0', '0'], v: ['fy-r_o', 'fy+r_o'], ve: ['0', '0'] });
+    for (let x = 15; x <= 19 + 1e-9; x += 0.5) S.monitors.push(+x.toFixed(4));
+    U.sel = []; return;
   } else {
     S.mats.push('FR-4 (lossy)');
     add('Substrate', 'FR-4 (lossy)', ['-L/2', 'L/2', '0', 'W', '0', 'h']);

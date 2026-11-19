@@ -94,7 +94,7 @@ function outline(ctx, t, en, color, w, dash) {
   ctx.restore();
 }
 function drawGrid(ctx, t) {
-  const pj = PJ(), s = pj.ref.sub[0][0], m = 10, st = (s.x1 - s.x0) > 60 ? 10 : 5;
+  const pj = PJ(), s = boundsOf(pj), m = (s.x1 - s.x0) < 20 ? 3 : 10, st = (s.x1 - s.x0) > 60 ? 10 : (s.x1 - s.x0) < 20 ? 1 : 5;
   const x0 = Math.floor((s.x0 - m) / st) * st, x1 = Math.ceil((s.x1 + m) / st) * st, y0 = Math.floor((s.y0 - m) / st) * st, y1 = Math.ceil((s.y1 + m) / st) * st, z = pj.z.bot;
   ctx.save(); ctx.strokeStyle = 'rgba(255,255,255,.55)'; ctx.lineWidth = 1;
   for (let x = x0; x <= x1; x += st) { ctx.beginPath(); ctx.moveTo(...proj(t, x, y0, z)); ctx.lineTo(...proj(t, x, y1, z)); ctx.stroke(); }
@@ -102,7 +102,7 @@ function drawGrid(ctx, t) {
   ctx.restore();
 }
 function drawMesh(ctx, t, items) {
-  const pj = PJ(), s = pj.ref.sub[0][0], f1 = S.freq ? S.freq[1] : pj.freq[1];
+  const pj = PJ(), s = boundsOf(pj), f1 = S.freq ? S.freq[1] : pj.freq[1];
   const lam = 300 / f1, maxStep = Math.min(lam / S.gmesh.cpw, Math.max(s.x1 - s.x0, s.y1 - s.y0) / S.gmesh.cpe);
   const xs = new Set([s.x0, s.x1]), ys = new Set([s.y0, s.y1]);
   for (const it of items) for (const { l } of leaves(it.en)) {
@@ -119,18 +119,25 @@ function drawMesh(ctx, t, items) {
   U.meshCells = X.length * Y.length * nz; $('#stMesh').textContent = 'Meshcells ≈ ' + U.meshCells.toLocaleString();
 }
 function drawGhost(ctx, t) {
-  const pj = PJ(), zOf = { sub: U.view === 'bot' ? pj.sub.z0 : pj.sub.z1, top: pj.z.top, bot: pj.z.bot, tall: pj.tall ? pj.tall.z1 : 0, dr: pj.dr ? pj.dr.z1 : 0 };
-  const show = U.view === 'top' ? ['sub', 'top', 'tall', 'dr'] : U.view === 'bot' ? ['sub', 'bot'] : pj.cats;
+  const pj = PJ();
+  let zOf, show;
+  if (pj.spec) {
+    zOf = {}; for (const c of pj.cats) zOf[c] = U.view === 'bot' ? pj.spec[c].z[0] : pj.spec[c].z[1];
+    show = U.view === 'bot' ? pj.cats.filter(c => pj.spec[c].z[0] <= 0.01) : pj.cats;
+  } else {
+    zOf = { sub: U.view === 'bot' ? pj.sub.z0 : pj.sub.z1, top: pj.z.top, bot: pj.z.bot, tall: pj.tall ? pj.tall.z1 : 0, dr: pj.dr ? pj.dr.z1 : 0 };
+    show = U.view === 'top' ? ['sub', 'top', 'tall', 'dr'] : U.view === 'bot' ? ['sub', 'bot'] : pj.cats;
+  }
   ctx.save(); ctx.strokeStyle = '#0077ff'; ctx.lineWidth = 1.5 * U.dpr; ctx.setLineDash([5 * U.dpr, 4 * U.dpr]);
   for (const c of show) {
     if (!pj.ref[c]) continue;
     for (const p of pj.ref[c][0]) {
-      const a = (p.rot || 0) * D2R, co = Math.cos(a), si = Math.sin(a);
-      const pts = [[p.x0, p.y0], [p.x1, p.y0], [p.x1, p.y1], [p.x0, p.y1]].map(([x, y]) => [x * co - y * si, x * si + y * co]);
+      const pts = refPoly(p);
       ctx.beginPath(); pts.forEach((q, i) => { const r = proj(t, q[0], q[1], zOf[c]); i ? ctx.lineTo(...r) : ctx.moveTo(...r); }); ctx.closePath(); ctx.stroke();
     }
   }
   if (pj.via) { const v = pj.via; ctx.beginPath(); for (let k = 0; k <= 24; k++) { const a = k / 24 * 2 * PI, r = proj(t, v.x + Math.max(v.r, 0.4) * Math.cos(a), v.y + Math.max(v.r, 0.4) * Math.sin(a), pj.z.top); k ? ctx.lineTo(...r) : ctx.moveTo(...r); } ctx.stroke(); }
+  if (pj.coax) { const v = pj.coax; ctx.beginPath(); for (let k = 0; k <= 24; k++) { const a = k / 24 * 2 * PI, r = proj(t, v.x + 0.635 * Math.cos(a), v.y + 0.635 * Math.sin(a), -1.5); k ? ctx.lineTo(...r) : ctx.moveTo(...r); } ctx.stroke(); }
   ctx.restore();
 }
 function drawPort(ctx, t, p, P, i) {
@@ -158,12 +165,12 @@ function drawAxes(ctx, t) {
   ctx.restore();
 }
 function fit() {
-  const c = cv(), pj = PJ(), s = pj.ref.sub[0][0], zt = pj.dr ? pj.dr.z1 : pj.z.top;
+  const c = cv(), pj = PJ(), s = boundsOf(pj), zr = pj.fitZ || [pj.sub.z0, pj.dr ? pj.dr.z1 : pj.z.top];
   U.zoom = 1; U.ox = 0; U.oy = 0; const t = T();
-  const pts = []; for (const x of [s.x0, s.x1]) for (const y of [s.y0, s.y1]) for (const z of [pj.sub.z0, zt]) pts.push(proj(t, x, y, z));
+  const pts = []; for (const x of [s.x0, s.x1]) for (const y of [s.y0, s.y1]) for (const z of zr) pts.push(proj(t, x, y, z));
   const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]), w = Math.max(...xs) - Math.min(...xs), h = Math.max(...ys) - Math.min(...ys);
   U.zoom = Math.min(c.width * 0.8 / w, c.height * 0.78 / h);
-  const t2 = T(), p2 = pts.map(() => 0); const q = []; for (const x of [s.x0, s.x1]) for (const y of [s.y0, s.y1]) for (const z of [pj.sub.z0, zt]) q.push(proj(t2, x, y, z));
+  const t2 = T(), p2 = pts.map(() => 0); const q = []; for (const x of [s.x0, s.x1]) for (const y of [s.y0, s.y1]) for (const z of zr) q.push(proj(t2, x, y, z));
   const cx = (Math.max(...q.map(p => p[0])) + Math.min(...q.map(p => p[0]))) / 2, cy = (Math.max(...q.map(p => p[1])) + Math.min(...q.map(p => p[1]))) / 2;
   U.ox = c.width / 2 - cx; U.oy = c.height / 2 - cy;
   draw();
