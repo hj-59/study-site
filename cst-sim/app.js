@@ -19,6 +19,8 @@ const MAT_LIB = [
   { name: 'Rogers RO4003C (lossless)', kind: 'diel', eps: 3.38, tand: 0, color: '#7fdfe0', info: 'εr = 3.38, tanδ = 0' },
   { name: 'Rogers RT5880 (lossy)', kind: 'diel', eps: 2.2, tand: 0.0009, color: '#9ccff2', info: 'εr = 2.2, tanδ = 0.0009' },
   { name: 'Rogers RO3010 (lossy)', kind: 'diel', eps: 10.2, tand: 0.0022, color: '#f0d36a', info: 'εr = 10.2, tanδ = 0.0022' },
+  { name: 'Taconic TLY-5 (lossy)', kind: 'diel', eps: 2.2, tand: 0.0009, color: '#f0d2c2', info: 'εr = 2.2, tanδ = 0.0009' },
+  { name: 'PTFE (lossy)', kind: 'diel', eps: 2.1, tand: 0.0002, color: '#fff3a0', info: 'εr = 2.1, tanδ = 0.0002' },
   { name: 'Alumina (99.5%) (lossy)', kind: 'diel', eps: 9.9, tand: 0.0001, color: '#f2efe2', info: 'εr = 9.9, tanδ = 0.0001' }
 ];
 function getMat(name) {
@@ -28,7 +30,7 @@ function getMat(name) {
 /* ---------- 상태 ---------- */
 let S = null;            // 저장되는 프로젝트 상태
 const U = {              // 화면 상태
-  view: 'iso', az: -30, el: 50, zoom: 10, ox: 0, oy: 0, sel: [], pick: null, mode: null, boolOp: null,
+  selPorts: [], view: 'iso', az: -30, el: 50, zoom: 10, ox: 0, oy: 0, sel: [], pick: null, mode: null, boolOp: null,
   trans: false, ghost: false, grid: true, mesh: false, tab: '3D', tabs: [], closed: new Set(['mats']),
   preview: null, dpr: 1, missionTab: 'steps', openStep: -1, hover: null
 };
@@ -36,7 +38,7 @@ let undoStack = [];
 const PJ = () => PROJECTS[S.proj];
 
 function blankState(key) {
-  return { proj: key, params: [], freq: null, solids: [], ports: [], monitors: [], tpls: [], mats: ['PEC', 'Vacuum'], custom: {}, results: null, sweep: null, gmesh: { cpw: 15, cpe: 20 }, nextId: 1 };
+  return { proj: key, params: [], freq: null, solids: [], ports: [], monitors: [], tpls: [], exc: [], mats: ['PEC', 'Vacuum'], custom: {}, results: null, sweep: null, gmesh: { cpw: 15, cpe: 20 }, nextId: 1 };
 }
 function save() { try { localStorage.setItem('cstsim2:' + S.proj, JSON.stringify(S)); localStorage.setItem('cstsim2:last', S.proj); } catch (e) { } }
 function loadSaved(key) { try { const t = localStorage.getItem('cstsim2:' + key); return t ? JSON.parse(t) : null; } catch (e) { return null; } }
@@ -88,7 +90,10 @@ function tfPoint(p, t, P) {
     const a = ev(t.a, P) * k * D2R, cx = ev(t.c[0], P), cy = ev(t.c[1], P), c = Math.cos(a), s = Math.sin(a);
     const x = p[0] - cx, y = p[1] - cy; return [cx + x * c - y * s, cy + x * s + y * c];
   }
-  if (t.k === 'mir') { const c = ev(t.c, P); return t.ax === 'x' ? [2 * c - p[0], p[1]] : [p[0], 2 * c - p[1]]; }
+  if (t.k === 'mir') {
+    if (t.nv) { const nx0 = ev(t.nv[0], P), ny0 = ev(t.nv[1], P), n = Math.hypot(nx0, ny0) || 1, nx = nx0 / n, ny = ny0 / n, cx = ev(t.c[0], P), cy = ev(t.c[1], P), d = (p[0] - cx) * nx + (p[1] - cy) * ny; return [p[0] - 2 * d * nx, p[1] - 2 * d * ny]; }
+    const c = ev(t.c, P); return t.ax === 'x' ? [2 * c - p[0], p[1]] : [p[0], 2 * c - p[1]];
+  }
   return p;
 }
 function evalNode(n, P) {
@@ -137,9 +142,10 @@ function isCylOnly(en) { return leaves(en).every(o => o.l.t === 'cyl'); }
 
 /* ---------- 정답 비교 (래스터) ---------- */
 const GRIDC = {};
+const boundsOf = pj => pj.bounds || pj.ref.sub[0][0];
 function grid(pj) {
   if (GRIDC[pj.key]) return GRIDC[pj.key];
-  const s = pj.ref.sub[0][0];
+  const s = boundsOf(pj);
   const x0 = s.x0 - 3, x1 = s.x1 + 3, y0 = s.y0 - 3, y1 = s.y1 + 3;
   const step = Math.max(x1 - x0, y1 - y0) / 320;
   const nx = Math.ceil((x1 - x0) / step), ny = Math.ceil((y1 - y0) / step);
@@ -147,8 +153,24 @@ function grid(pj) {
 }
 function refContains(p, x, y) {
   let X = x, Y = y;
-  if (p.rot) { const a = -p.rot * D2R, c = Math.cos(a), s = Math.sin(a); X = x * c - y * s; Y = x * s + y * c; }
+  if (p.tf) { for (let i = p.tf.length - 1; i >= 0; i--) { [X, Y] = tfRef(p.tf[i], X, Y, true); } }
+  else if (p.rot) { const a = -p.rot * D2R, c = Math.cos(a), s = Math.sin(a); X = x * c - y * s; Y = x * s + y * c; }
+  if (p.circ) return (X - p.circ[0]) ** 2 + (Y - p.circ[1]) ** 2 <= p.circ[2] * p.circ[2];
   return X >= p.x0 && X <= p.x1 && Y >= p.y0 && Y <= p.y1;
+}
+function tfRef(t, X, Y, inv) {
+  if (t[0] === 't') return inv ? [X - t[1], Y - t[2]] : [X + t[1], Y + t[2]];
+  if (t[0] === 'm') { const n = Math.hypot(t[1], t[2]), nx = t[1] / n, ny = t[2] / n, d = (X - t[3]) * nx + (Y - t[4]) * ny; return [X - 2 * d * nx, Y - 2 * d * ny]; }
+  const [a, cx, cy] = t, r = (inv ? -a : a) * D2R, c = Math.cos(r), s = Math.sin(r), dx = X - cx, dy = Y - cy;
+  return [cx + dx * c - dy * s, cy + dx * s + dy * c];
+}
+function refPoly(p) {
+  if (p.circ) { const o = []; for (let k = 0; k < 24; k++) { const a = k / 24 * 2 * PI; let q = [p.circ[0] + p.circ[2] * Math.cos(a), p.circ[1] + p.circ[2] * Math.sin(a)]; if (p.tf) for (const t of p.tf) q = tfRef(t, q[0], q[1], false); o.push(q); } return o; }
+  let pts = [[p.x0, p.y0], [p.x1, p.y0], [p.x1, p.y1], [p.x0, p.y1]];
+  const rotp = (q, a, cx, cy) => { const r = a * D2R, c = Math.cos(r), s = Math.sin(r), dx = q[0] - cx, dy = q[1] - cy; return [cx + dx * c - dy * s, cy + dx * s + dy * c]; };
+  if (p.tf) for (const t of p.tf) pts = pts.map(q => tfRef(t, q[0], q[1], false));
+  else if (p.rot) pts = pts.map(q => rotp(q, p.rot, 0, 0));
+  return pts;
 }
 function rasterize(G, fn) {
   const m = new Uint8Array(G.nx * G.ny);
@@ -178,8 +200,18 @@ function userMask(G, list) {
 function iouOf(a, b) { let I = 0, Un = 0; for (let k = 0; k < a.length; k++) { if (a[k] && b[k]) I++; if (a[k] || b[k]) Un++; } return Un ? I / Un : 0; }
 function areaOf(a) { let n = 0; for (let k = 0; k < a.length; k++) n += a[k]; return n; }
 
+function posZ(en) { const ls = leaves(en).filter(o => o.s > 0); return { z0: Math.min(...ls.map(o => o.l.z0)), z1: Math.max(...ls.map(o => o.l.z1)) }; }
 function classify(pj, s, en, P) {
-  const m = getMat(s.mat), bb = bboxOf(en), th = bb.z1 - bb.z0, near = (a, b, t = 0.06) => Math.abs(a - b) < t;
+  const m = getMat(s.mat), bb = posZ(en), th = bb.z1 - bb.z0, near = (a, b, t = 0.06) => Math.abs(a - b) < t;
+  if (pj.spec) {
+    if (s.mat === 'Vacuum') return 'vac';
+    for (const [c, sp] of Object.entries(pj.spec)) {
+      if ((sp.kind === 'metal') !== (m.kind === 'metal')) continue;
+      if (sp.cyl && !isCylOnly(en)) continue;
+      if (near(bb.z0, sp.z[0]) && near(bb.z1, sp.z[1])) return c;
+    }
+    return m.kind === 'metal' ? 'metal-other' : 'diel-other';
+  }
   if (m.kind === 'metal') {
     if (isCylOnly(en)) return 'via';
     if (th > 3) return (pj.tall && near(bb.z0, pj.tall.z0, 0.1) && near(bb.z1, pj.tall.z1, 0.3)) ? 'tall' : 'metal-other';
@@ -195,7 +227,7 @@ function classify(pj, s, en, P) {
 
 function analyze(override) {
   const pj = PJ(), P = evalParams(S.params, override), G = grid(pj);
-  const A = { P, iou: {}, count: {}, mask: {}, bestVar: {}, items: [], report: [], errors: [] };
+  const A = { P, iou: {}, iouV: {}, count: {}, mask: {}, bestVar: {}, items: [], report: [], errors: [] };
   for (const s of S.solids) {
     let en; try { en = evalNode(s.node, P); } catch (e) { A.errors.push(s.name + ': ' + e.message); continue; }
     const it = { s, en, bb: bboxOf(en) }; it.cat = classify(pj, s, en, P); A.items.push(it);
@@ -204,7 +236,8 @@ function analyze(override) {
   for (const c of [...pj.cats, 'via']) A.count[c] = byCat(c).length;
   for (const c of pj.cats) {
     const um = userMask(G, byCat(c)); A.mask[c] = um;
-    let best = 0, bv = 0; pj.ref[c].forEach((_, v) => { const q = iouOf(um, refCatMask(pj, c, v)); if (q > best) { best = q; bv = v; } });
+    let best = 0, bv = 0; A.iouV[c] = [];
+    pj.ref[c].forEach((_, v) => { const q = iouOf(um, refCatMask(pj, c, v)); A.iouV[c][v] = q; if (q > best) { best = q; bv = v; } });
     A.iou[c] = best; A.bestVar[c] = bv;
   }
   A.cover = (c, ids) => {
@@ -216,17 +249,29 @@ function analyze(override) {
     });
     return best;
   };
+  A.empty = (c, ids) => {
+    const um = A.mask[c]; if (!um) return 0; let best = 0;
+    pj.ref[c].forEach((_, v) => {
+      let mn = 1;
+      for (const id of ids) { const pm = refPartMask(pj, c, v, id); if (!pm) { mn = 0; break; } let E = 0, N = 0; for (let k = 0; k < pm.length; k++) if (pm[k]) { N++; if (!um[k]) E++; } mn = Math.min(mn, N ? E / N : 0); }
+      best = Math.max(best, mn);
+    });
+    return best;
+  };
   // 재질 점검
+  if (!pj.spec) {
   const subs = byCat('sub').sort((a, b) => (b.bb.x1 - b.bb.x0) * (b.bb.y1 - b.bb.y0) - (a.bb.x1 - a.bb.x0) * (a.bb.y1 - a.bb.y0));
   A.subMat = subs[0] ? getMat(subs[0].s.mat) : null;
   A.subOk = !!(A.subMat && Math.abs(A.subMat.eps - pj.sub.eps) < 0.2 && A.subMat.tand > 0);
   if (pj.dr) { const d = byCat('dr')[0]; A.drMat = d ? getMat(d.s.mat) : null; A.drOk = !!(A.drMat && Math.abs(A.drMat.eps - pj.dr.eps) < 0.6); }
+  }
   if (pj.via) {
     const v = byCat('via').find(i => { const l = leaves(i.en)[0].l; return Math.hypot(l.c[0] - pj.via.x, l.c[1] - pj.via.y) < 0.4 && i.bb.z0 <= pj.via.z0 + 0.06 && i.bb.z1 >= pj.via.z1 - 0.06; });
     A.viaOk = !!v; A.viaMesh = !!(v && v.s.localMesh > 0);
   }
   // 파라미터
-  A.paramsOk = pj.params.every(([n, v]) => Math.abs((P[n] ?? NaN) - v) < 1e-6);
+  const RP = evalParams(pj.params.map(([n, v]) => ({ name: n, expr: String(v) })));
+  A.paramsOk = pj.params.every(([n]) => Math.abs((P[n] ?? NaN) - RP[n]) < 1e-6);
   A.freqOk = !!(S.freq && S.freq[0] <= pj.freq[0] + 1e-9 && S.freq[1] >= pj.freq[1] - 1e-9);
   A.port = portCheck(P);
   A.portOk = A.port.q >= 0.84;
@@ -235,6 +280,7 @@ function analyze(override) {
   A.tplCount = S.tpls.length;
   A.tplAR = S.tpls.some(t => t.q === 'Axial Ratio');
   A.hasMat = eps => S.mats.some(n => { const m = getMat(n); return m.kind === 'diel' && Math.abs(m.eps - eps) < 0.05; });
+  if (pj.extra) A.extraRep = pj.extra(A, byCat);
   return A;
 }
 
@@ -256,13 +302,13 @@ function portCheck(P) {
   let b; try { b = portBox(p, P); } catch (e) { return { q: 0, issues: ['포트 좌표 오류: ' + e.message] }; }
   let q = 1;
   if (p.normal !== r.axis) { return { q: 0, issues: ['포트 Normal이 ' + p.normal.toUpperCase() + '입니다. 급전선 끝면의 법선은 ' + r.axis.toUpperCase() + '입니다.'] }; }
-  if (Math.abs(b.pos - r.pos) > 0.06) { q = Math.min(q, 0.1); issues.push('포트가 급전선 끝(기판 가장자리, ' + r.axis + ' = ' + r.pos + ')에 있지 않습니다.'); }
+  if (Math.abs(b.pos - r.pos) > 0.06) { q = Math.min(q, 0.1); issues.push('포트가 ' + (r.posMsg || '급전선 끝(기판 가장자리, ' + r.axis + ' = ' + r.pos + ')') + '에 있지 않습니다.'); }
   if (p.dir !== r.dir) { q = 0; issues.push('Orientation이 바깥(허공)을 향합니다. 안테나 쪽을 보도록 ' + (r.dir > 0 ? 'Positive' : 'Negative') + '로 바꾸세요.'); }
-  if (b.u0 > r.span[0] + 1e-6 || b.u1 < r.span[1] - 1e-6) { q = Math.min(q, 0.15); issues.push('포트가 급전선 폭을 다 덮지 않습니다.'); }
-  if (b.v0 > r.z[0] + 1e-6 || b.v1 < r.z[1] - 1e-6) { q = Math.min(q, 0.4); issues.push('포트 z 범위가 급전선과 그라운드를 모두 포함하지 않습니다. 여유값을 주세요.'); }
+  if (b.u0 > r.span[0] + 1e-6 || b.u1 < r.span[1] - 1e-6) { q = Math.min(q, 0.15); issues.push(r.spanMsg || '포트가 급전선 폭을 다 덮지 않습니다.'); }
+  if (b.v0 > r.z[0] + 1e-6 || b.v1 < r.z[1] - 1e-6) { q = Math.min(q, 0.4); issues.push(r.vMsg || '포트 z 범위가 급전선과 그라운드를 모두 포함하지 않습니다. 여유값을 주세요.'); }
   const th = Math.abs(r.z[1] - r.z[0]), wid = b.u1 - b.u0;
-  if (q > 0.4 && wid < r.feedW + 2 * 2 * th) { q = Math.min(q, 0.85); issues.push('포트가 좁습니다. 급전선 양옆으로 기판 두께의 3~15배 여유를 권장합니다.'); }
-  if (q > 0.4 && wid > r.feedW + 2 * 20 * th) { q = Math.min(q, 0.9); issues.push('포트가 너무 넓습니다(고차 모드 위험).'); }
+  if (!r.noSize && q > 0.4 && wid < r.feedW + 2 * 2 * th) { q = Math.min(q, 0.85); issues.push('포트가 좁습니다. 급전선 양옆으로 기판 두께의 3~15배 여유를 권장합니다.'); }
+  if (!r.noSize && q > 0.4 && wid > r.feedW + 2 * 20 * th) { q = Math.min(q, 0.9); issues.push('포트가 너무 넓습니다(고차 모드 위험).'); }
   return { q, issues };
 }
 
@@ -277,6 +323,16 @@ function simulate(override, baseQ) {
   for (const c of pj.cats) {
     const v = A.iou[c]; q = Math.min(q, v);
     rep.push([v > 0.95 ? 'ok' : v > 0.7 ? 'warn' : 'err', `${pj.catName[c]}: 정답 형상과 ${(v * 100).toFixed(1)}% 일치`]);
+  }
+  if (pj.gradeOnly) {
+    for (const it of A.items) if (['metal-other', 'diel-other'].includes(it.cat)) rep.push(['warn', `'${it.s.name}'의 z 위치(${fmt(it.bb.z0)} ~ ${fmt(it.bb.z1)})나 재질이 약속한 층과 맞지 않습니다. (아직 Subtract 안 한 도구라면 무시)`]);
+    (A.extraRep || []).forEach(x => rep.push(x));
+    if (!pj.array) A.port.issues.forEach(t => rep.push([A.port.q < 0.84 ? 'err' : 'warn', '포트: ' + t]));
+    if (!pj.array && S.monitors.length < 9) rep.push(['warn', 'Farfield 모니터가 15–19 GHz, 0.5 간격(9개)보다 적습니다.']);
+    if (pj.array && !S.monitors.some(f => Math.abs(f - 16.5) < 1e-6)) rep.push(['warn', '16.5 GHz Farfield 모니터가 없습니다.']);
+    const allOk = q >= 0.95 && A.portOk && A.subOk && A.coaxOk;
+    if (allOk) rep.unshift(['ok', '형상이 과제 도면과 일치합니다. 실제 CST에서 같은 순서로 만들면 됩니다.']);
+    return { gradeOnly: true, rep, q, allOk, exc: A.exc || [] };
   }
   for (const it of A.items) if (['metal-other', 'diel-other'].includes(it.cat)) rep.push(['warn', `'${it.s.name}'의 z 위치(${fmt(it.bb.z0)} ~ ${fmt(it.bb.z1)})가 약속한 면과 맞지 않아 비교에서 제외했습니다.`]);
   if (baseQ != null) q = Math.max(q, baseQ);
@@ -345,6 +401,7 @@ function msg(type, text) {
 /* ---------- 변경 처리 ---------- */
 let anTimer = null, lastA = null;
 function afterChange(geomChanged) {
+  if (geomChanged) S.ran = false;
   if (geomChanged && S.results) { S.results = null; S.sweep = null; U.tabs = U.tabs.filter(t => t.kind === '3d'); U.tab = '3D'; msg('warn', '모델이 바뀌어 기존 결과를 삭제했습니다. 다시 Start 하세요.'); }
   save(); renderTree(); renderParams(); draw(); renderTabs();
   clearTimeout(anTimer); anTimer = setTimeout(() => { lastA = analyze(); renderMission(); }, 120);

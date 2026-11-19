@@ -31,16 +31,19 @@ function leafPath(x, l) {
   if (l.t === 'brick') { l.pts.forEach((p, i) => i ? x.lineTo(p[0], p[1]) : x.moveTo(p[0], p[1])); x.closePath(); }
   else { x.arc(l.c[0], l.c[1], l.ro, 0, 2 * PI); if (l.ri > 0) { x.moveTo(l.c[0] + l.ri, l.c[1]); x.arc(l.c[0], l.c[1], l.ri, 0, 2 * PI, true); } }
 }
+let CLIP = null; // 이 도형이 차지하는 화면 영역 (z = 0 기준)
+function dImg(ctx, src, dy) { if (!CLIP) return ctx.drawImage(src, 0, dy || 0); const r = CLIP; ctx.drawImage(src, r.x, r.y, r.w, r.h, r.x, r.y + (dy || 0), r.w, r.h); }
 function renderInto(x, en, op, t) {
   if (en.t !== 'grp') { x.globalCompositeOperation = op; leafPath(x, en); x.fillStyle = '#000'; x.fill('evenodd'); return; }
   const c2 = oc(), x2 = c2.getContext('2d'); x2.setTransform(...t.m);
   en.items.forEach(it => renderInto(x2, it.n, it.s > 0 ? 'source-over' : 'destination-out', t));
-  x.save(); x.setTransform(1, 0, 0, 1, 0, 0); x.globalCompositeOperation = op; x.drawImage(c2, 0, 0); x.restore();
+  x.save(); x.setTransform(1, 0, 0, 1, 0, 0); x.globalCompositeOperation = op; dImg(x, c2, 0); x.restore();
 }
-function tinted(mask, color) { const o = oc(), x = o.getContext('2d'); x.drawImage(mask, 0, 0); x.globalCompositeOperation = 'source-in'; x.fillStyle = color; x.fillRect(0, 0, o.width, o.height); return o; }
+function tinted(mask, color) { const o = oc(), x = o.getContext('2d'); dImg(x, mask, 0); x.globalCompositeOperation = 'source-in'; x.fillStyle = color; if (CLIP) x.fillRect(CLIP.x, CLIP.y, CLIP.w, CLIP.h); else x.fillRect(0, 0, o.width, o.height); return o; }
 function shade(hex, k) { const n = parseInt(hex.slice(1), 16); const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255; return `rgb(${Math.round(r * k)},${Math.round(g * k)},${Math.round(b * k)})`; }
 
-let lastItems = [];
+let lastItems = [], drawPending = false;
+function drawSoon() { if (drawPending) return; drawPending = true; requestAnimationFrame(() => { drawPending = false; draw(); }); }
 function draw() {
   const c = cv(); if (!c || !S) return;
   const ctx = c.getContext('2d'); ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -66,6 +69,13 @@ function draw() {
   ctx.fillText(U.view === 'iso' ? '3D (드래그: 회전, Shift+드래그: 이동, 휠: 확대)' : U.view === 'top' ? 'Front: +z에서 내려다본 모습 (윗면)' : 'Back: −z에서 올려다본 모습 (아랫면, 좌우 반전)', 10 * U.dpr, c.height - 10 * U.dpr);
 }
 function drawSolid(ctx, t, it, sel) {
+  const W = cv().width, Hh = cv().height, b = it.bb;
+  const cs = [[b.x0, b.y0], [b.x1, b.y0], [b.x0, b.y1], [b.x1, b.y1]].map(([x, y]) => proj(t, x, y, 0));
+  let x0 = Math.floor(Math.min(...cs.map(c => c[0]))) - 3, x1 = Math.ceil(Math.max(...cs.map(c => c[0]))) + 3, y0 = Math.floor(Math.min(...cs.map(c => c[1]))) - 3, y1 = Math.ceil(Math.max(...cs.map(c => c[1]))) + 3;
+  const top0 = y0 - Math.ceil(t.zk * Math.max(b.z1, 0)) - 2, bot0 = y1 + Math.ceil(t.zk * Math.max(-b.z0, 0)) + 2;
+  if (x1 < 0 || x0 > W || bot0 < 0 || top0 > Hh) return;
+  x0 = clamp(x0, 0, W); x1 = clamp(x1, 0, W); y0 = clamp(y0, 0, Hh); y1 = clamp(y1, 0, Hh);
+  CLIP = x1 > x0 && y1 > y0 ? { x: x0, y: y0, w: x1 - x0, h: y1 - y0 } : null;
   const m = getMat(it.s.mat), mask = oc(), mx = mask.getContext('2d'); mx.setTransform(...t.m);
   renderInto(mx, it.en, 'source-over', t);
   const isD = m.kind === 'diel';
@@ -74,11 +84,14 @@ function drawSolid(ctx, t, it, sel) {
   const layer = oc(), lx = layer.getContext('2d');
   if (t.zk > 0) {
     const side = tinted(mask, shade(m.color, 0.72)), z0 = it.bb.z0, z1 = it.bb.z1, n = Math.min(400, Math.max(1, Math.ceil((z1 - z0) * t.zk)));
-    if (z1 - z0 > 1e-9) for (let i = 0; i <= n; i++) lx.drawImage(side, 0, -t.zk * (z0 + (z1 - z0) * i / n));
-    lx.drawImage(top, 0, -t.zk * z1);
-  } else lx.drawImage(top, 0, 0);
-  if (sel) { const o = tinted(mask, '#ff8c1a'); lx.globalAlpha = 0.55; lx.drawImage(o, 0, -t.zk * it.bb.z1); lx.globalAlpha = 1; }
-  ctx.globalAlpha = alpha; ctx.drawImage(layer, 0, 0); ctx.globalAlpha = 1;
+    if (z1 - z0 > 1e-9) for (let i = 0; i <= n; i++) dImg(lx, side, -t.zk * (z0 + (z1 - z0) * i / n));
+    dImg(lx, top, -t.zk * z1);
+  } else dImg(lx, top, 0);
+  if (sel) { const o = tinted(mask, '#ff8c1a'); lx.globalAlpha = 0.55; dImg(lx, o, -t.zk * it.bb.z1); lx.globalAlpha = 1; }
+  const cl = CLIP; CLIP = null;
+  ctx.globalAlpha = alpha;
+  if (cl) { const ya = clamp(top0, 0, Hh), yb = clamp(bot0, 0, Hh); if (yb > ya) ctx.drawImage(layer, cl.x, ya, cl.w, yb - ya, cl.x, ya, cl.w, yb - ya); } else ctx.drawImage(layer, 0, 0);
+  ctx.globalAlpha = 1;
   outline(ctx, t, it.en, sel ? '#ff6a00' : 'rgba(25,25,25,.45)', sel ? 2 : 1);
 }
 function outline(ctx, t, en, color, w, dash) {
@@ -94,7 +107,7 @@ function outline(ctx, t, en, color, w, dash) {
   ctx.restore();
 }
 function drawGrid(ctx, t) {
-  const pj = PJ(), s = pj.ref.sub[0][0], m = 10, st = (s.x1 - s.x0) > 60 ? 10 : 5;
+  const pj = PJ(), s = boundsOf(pj), m = (s.x1 - s.x0) < 20 ? 3 : 10, st = (s.x1 - s.x0) > 60 ? 10 : (s.x1 - s.x0) < 20 ? 1 : 5;
   const x0 = Math.floor((s.x0 - m) / st) * st, x1 = Math.ceil((s.x1 + m) / st) * st, y0 = Math.floor((s.y0 - m) / st) * st, y1 = Math.ceil((s.y1 + m) / st) * st, z = pj.z.bot;
   ctx.save(); ctx.strokeStyle = 'rgba(255,255,255,.55)'; ctx.lineWidth = 1;
   for (let x = x0; x <= x1; x += st) { ctx.beginPath(); ctx.moveTo(...proj(t, x, y0, z)); ctx.lineTo(...proj(t, x, y1, z)); ctx.stroke(); }
@@ -102,7 +115,7 @@ function drawGrid(ctx, t) {
   ctx.restore();
 }
 function drawMesh(ctx, t, items) {
-  const pj = PJ(), s = pj.ref.sub[0][0], f1 = S.freq ? S.freq[1] : pj.freq[1];
+  const pj = PJ(), s = boundsOf(pj), f1 = S.freq ? S.freq[1] : pj.freq[1];
   const lam = 300 / f1, maxStep = Math.min(lam / S.gmesh.cpw, Math.max(s.x1 - s.x0, s.y1 - s.y0) / S.gmesh.cpe);
   const xs = new Set([s.x0, s.x1]), ys = new Set([s.y0, s.y1]);
   for (const it of items) for (const { l } of leaves(it.en)) {
@@ -119,18 +132,25 @@ function drawMesh(ctx, t, items) {
   U.meshCells = X.length * Y.length * nz; $('#stMesh').textContent = 'Meshcells ≈ ' + U.meshCells.toLocaleString();
 }
 function drawGhost(ctx, t) {
-  const pj = PJ(), zOf = { sub: U.view === 'bot' ? pj.sub.z0 : pj.sub.z1, top: pj.z.top, bot: pj.z.bot, tall: pj.tall ? pj.tall.z1 : 0, dr: pj.dr ? pj.dr.z1 : 0 };
-  const show = U.view === 'top' ? ['sub', 'top', 'tall', 'dr'] : U.view === 'bot' ? ['sub', 'bot'] : pj.cats;
+  const pj = PJ();
+  let zOf, show;
+  if (pj.spec) {
+    zOf = {}; for (const c of pj.cats) zOf[c] = U.view === 'bot' ? pj.spec[c].z[0] : pj.spec[c].z[1];
+    show = U.view === 'bot' ? pj.cats.filter(c => pj.spec[c].z[0] <= 0.01) : pj.cats;
+  } else {
+    zOf = { sub: U.view === 'bot' ? pj.sub.z0 : pj.sub.z1, top: pj.z.top, bot: pj.z.bot, tall: pj.tall ? pj.tall.z1 : 0, dr: pj.dr ? pj.dr.z1 : 0 };
+    show = U.view === 'top' ? ['sub', 'top', 'tall', 'dr'] : U.view === 'bot' ? ['sub', 'bot'] : pj.cats;
+  }
   ctx.save(); ctx.strokeStyle = '#0077ff'; ctx.lineWidth = 1.5 * U.dpr; ctx.setLineDash([5 * U.dpr, 4 * U.dpr]);
   for (const c of show) {
     if (!pj.ref[c]) continue;
     for (const p of pj.ref[c][0]) {
-      const a = (p.rot || 0) * D2R, co = Math.cos(a), si = Math.sin(a);
-      const pts = [[p.x0, p.y0], [p.x1, p.y0], [p.x1, p.y1], [p.x0, p.y1]].map(([x, y]) => [x * co - y * si, x * si + y * co]);
+      const pts = refPoly(p);
       ctx.beginPath(); pts.forEach((q, i) => { const r = proj(t, q[0], q[1], zOf[c]); i ? ctx.lineTo(...r) : ctx.moveTo(...r); }); ctx.closePath(); ctx.stroke();
     }
   }
   if (pj.via) { const v = pj.via; ctx.beginPath(); for (let k = 0; k <= 24; k++) { const a = k / 24 * 2 * PI, r = proj(t, v.x + Math.max(v.r, 0.4) * Math.cos(a), v.y + Math.max(v.r, 0.4) * Math.sin(a), pj.z.top); k ? ctx.lineTo(...r) : ctx.moveTo(...r); } ctx.stroke(); }
+  if (pj.coax) { const v = pj.coax; ctx.beginPath(); for (let k = 0; k <= 24; k++) { const a = k / 24 * 2 * PI, r = proj(t, v.x + 0.635 * Math.cos(a), v.y + 0.635 * Math.sin(a), -1.5); k ? ctx.lineTo(...r) : ctx.moveTo(...r); } ctx.stroke(); }
   ctx.restore();
 }
 function drawPort(ctx, t, p, P, i) {
@@ -158,12 +178,12 @@ function drawAxes(ctx, t) {
   ctx.restore();
 }
 function fit() {
-  const c = cv(), pj = PJ(), s = pj.ref.sub[0][0], zt = pj.dr ? pj.dr.z1 : pj.z.top;
+  const c = cv(), pj = PJ(), s = boundsOf(pj), zr = pj.fitZ || [pj.sub.z0, pj.dr ? pj.dr.z1 : pj.z.top];
   U.zoom = 1; U.ox = 0; U.oy = 0; const t = T();
-  const pts = []; for (const x of [s.x0, s.x1]) for (const y of [s.y0, s.y1]) for (const z of [pj.sub.z0, zt]) pts.push(proj(t, x, y, z));
+  const pts = []; for (const x of [s.x0, s.x1]) for (const y of [s.y0, s.y1]) for (const z of zr) pts.push(proj(t, x, y, z));
   const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]), w = Math.max(...xs) - Math.min(...xs), h = Math.max(...ys) - Math.min(...ys);
   U.zoom = Math.min(c.width * 0.8 / w, c.height * 0.78 / h);
-  const t2 = T(), p2 = pts.map(() => 0); const q = []; for (const x of [s.x0, s.x1]) for (const y of [s.y0, s.y1]) for (const z of [pj.sub.z0, zt]) q.push(proj(t2, x, y, z));
+  const t2 = T(), p2 = pts.map(() => 0); const q = []; for (const x of [s.x0, s.x1]) for (const y of [s.y0, s.y1]) for (const z of zr) q.push(proj(t2, x, y, z));
   const cx = (Math.max(...q.map(p => p[0])) + Math.min(...q.map(p => p[0]))) / 2, cy = (Math.max(...q.map(p => p[1])) + Math.min(...q.map(p => p[1]))) / 2;
   U.ox = c.width / 2 - cx; U.oy = c.height / 2 - cy;
   draw();
@@ -216,7 +236,7 @@ function initMouse() {
     if (Math.abs(dx) + Math.abs(dy) > 3) down.moved = true; if (!down.moved) return;
     if (U.view === 'iso' && !down.shift) { U.az = down.az - dx * 0.4; U.el = clamp(down.el + dy * 0.3, 5, 90); }
     else { U.ox = down.ox + dx * U.dpr; U.oy = down.oy + dy * U.dpr; }
-    draw();
+    drawSoon();
   });
   window.addEventListener('mouseup', e => {
     if (!down) return; const d = down; down = null; if (d.moved || e.target !== c) return;
@@ -231,6 +251,6 @@ function initMouse() {
   });
   c.addEventListener('wheel', e => {
     e.preventDefault(); const r = c.getBoundingClientRect(), mx = (e.clientX - r.left) * U.dpr, my = (e.clientY - r.top) * U.dpr, k = e.deltaY < 0 ? 1.15 : 1 / 1.15;
-    U.ox = mx - (mx - U.ox) * k; U.oy = my - (my - U.oy) * k; U.zoom *= k; draw();
+    U.ox = mx - (mx - U.ox) * k; U.oy = my - (my - U.oy) * k; U.zoom *= k; drawSoon();
   }, { passive: false });
 }
