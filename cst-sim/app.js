@@ -30,7 +30,7 @@ function getMat(name) {
 /* ---------- 상태 ---------- */
 let S = null;            // 저장되는 프로젝트 상태
 const U = {              // 화면 상태
-  view: 'iso', az: -30, el: 50, zoom: 10, ox: 0, oy: 0, sel: [], pick: null, mode: null, boolOp: null,
+  selPorts: [], view: 'iso', az: -30, el: 50, zoom: 10, ox: 0, oy: 0, sel: [], pick: null, mode: null, boolOp: null,
   trans: false, ghost: false, grid: true, mesh: false, tab: '3D', tabs: [], closed: new Set(['mats']),
   preview: null, dpr: 1, missionTab: 'steps', openStep: -1, hover: null
 };
@@ -38,7 +38,7 @@ let undoStack = [];
 const PJ = () => PROJECTS[S.proj];
 
 function blankState(key) {
-  return { proj: key, params: [], freq: null, solids: [], ports: [], monitors: [], tpls: [], mats: ['PEC', 'Vacuum'], custom: {}, results: null, sweep: null, gmesh: { cpw: 15, cpe: 20 }, nextId: 1 };
+  return { proj: key, params: [], freq: null, solids: [], ports: [], monitors: [], tpls: [], exc: [], mats: ['PEC', 'Vacuum'], custom: {}, results: null, sweep: null, gmesh: { cpw: 15, cpe: 20 }, nextId: 1 };
 }
 function save() { try { localStorage.setItem('cstsim2:' + S.proj, JSON.stringify(S)); localStorage.setItem('cstsim2:last', S.proj); } catch (e) { } }
 function loadSaved(key) { try { const t = localStorage.getItem('cstsim2:' + key); return t ? JSON.parse(t) : null; } catch (e) { return null; } }
@@ -90,7 +90,10 @@ function tfPoint(p, t, P) {
     const a = ev(t.a, P) * k * D2R, cx = ev(t.c[0], P), cy = ev(t.c[1], P), c = Math.cos(a), s = Math.sin(a);
     const x = p[0] - cx, y = p[1] - cy; return [cx + x * c - y * s, cy + x * s + y * c];
   }
-  if (t.k === 'mir') { const c = ev(t.c, P); return t.ax === 'x' ? [2 * c - p[0], p[1]] : [p[0], 2 * c - p[1]]; }
+  if (t.k === 'mir') {
+    if (t.nv) { const nx0 = ev(t.nv[0], P), ny0 = ev(t.nv[1], P), n = Math.hypot(nx0, ny0) || 1, nx = nx0 / n, ny = ny0 / n, cx = ev(t.c[0], P), cy = ev(t.c[1], P), d = (p[0] - cx) * nx + (p[1] - cy) * ny; return [p[0] - 2 * d * nx, p[1] - 2 * d * ny]; }
+    const c = ev(t.c, P); return t.ax === 'x' ? [2 * c - p[0], p[1]] : [p[0], 2 * c - p[1]];
+  }
   return p;
 }
 function evalNode(n, P) {
@@ -150,16 +153,22 @@ function grid(pj) {
 }
 function refContains(p, x, y) {
   let X = x, Y = y;
-  if (p.tf) { for (let i = p.tf.length - 1; i >= 0; i--) { const [a, cx, cy] = p.tf[i], r = -a * D2R, c = Math.cos(r), s = Math.sin(r), dx = X - cx, dy = Y - cy; X = cx + dx * c - dy * s; Y = cy + dx * s + dy * c; } }
+  if (p.tf) { for (let i = p.tf.length - 1; i >= 0; i--) { [X, Y] = tfRef(p.tf[i], X, Y, true); } }
   else if (p.rot) { const a = -p.rot * D2R, c = Math.cos(a), s = Math.sin(a); X = x * c - y * s; Y = x * s + y * c; }
   if (p.circ) return (X - p.circ[0]) ** 2 + (Y - p.circ[1]) ** 2 <= p.circ[2] * p.circ[2];
   return X >= p.x0 && X <= p.x1 && Y >= p.y0 && Y <= p.y1;
 }
+function tfRef(t, X, Y, inv) {
+  if (t[0] === 't') return inv ? [X - t[1], Y - t[2]] : [X + t[1], Y + t[2]];
+  if (t[0] === 'm') { const n = Math.hypot(t[1], t[2]), nx = t[1] / n, ny = t[2] / n, d = (X - t[3]) * nx + (Y - t[4]) * ny; return [X - 2 * d * nx, Y - 2 * d * ny]; }
+  const [a, cx, cy] = t, r = (inv ? -a : a) * D2R, c = Math.cos(r), s = Math.sin(r), dx = X - cx, dy = Y - cy;
+  return [cx + dx * c - dy * s, cy + dx * s + dy * c];
+}
 function refPoly(p) {
-  if (p.circ) { const o = []; for (let k = 0; k < 24; k++) { const a = k / 24 * 2 * PI; o.push([p.circ[0] + p.circ[2] * Math.cos(a), p.circ[1] + p.circ[2] * Math.sin(a)]); } return o; }
+  if (p.circ) { const o = []; for (let k = 0; k < 24; k++) { const a = k / 24 * 2 * PI; let q = [p.circ[0] + p.circ[2] * Math.cos(a), p.circ[1] + p.circ[2] * Math.sin(a)]; if (p.tf) for (const t of p.tf) q = tfRef(t, q[0], q[1], false); o.push(q); } return o; }
   let pts = [[p.x0, p.y0], [p.x1, p.y0], [p.x1, p.y1], [p.x0, p.y1]];
   const rotp = (q, a, cx, cy) => { const r = a * D2R, c = Math.cos(r), s = Math.sin(r), dx = q[0] - cx, dy = q[1] - cy; return [cx + dx * c - dy * s, cy + dx * s + dy * c]; };
-  if (p.tf) for (const [a, cx, cy] of p.tf) pts = pts.map(q => rotp(q, a, cx, cy));
+  if (p.tf) for (const t of p.tf) pts = pts.map(q => tfRef(t, q[0], q[1], false));
   else if (p.rot) pts = pts.map(q => rotp(q, p.rot, 0, 0));
   return pts;
 }
@@ -249,7 +258,6 @@ function analyze(override) {
     });
     return best;
   };
-  if (pj.extra) A.extraRep = pj.extra(A, byCat);
   // 재질 점검
   if (!pj.spec) {
   const subs = byCat('sub').sort((a, b) => (b.bb.x1 - b.bb.x0) * (b.bb.y1 - b.bb.y0) - (a.bb.x1 - a.bb.x0) * (a.bb.y1 - a.bb.y0));
@@ -272,6 +280,7 @@ function analyze(override) {
   A.tplCount = S.tpls.length;
   A.tplAR = S.tpls.some(t => t.q === 'Axial Ratio');
   A.hasMat = eps => S.mats.some(n => { const m = getMat(n); return m.kind === 'diel' && Math.abs(m.eps - eps) < 0.05; });
+  if (pj.extra) A.extraRep = pj.extra(A, byCat);
   return A;
 }
 
@@ -318,11 +327,12 @@ function simulate(override, baseQ) {
   if (pj.gradeOnly) {
     for (const it of A.items) if (['metal-other', 'diel-other'].includes(it.cat)) rep.push(['warn', `'${it.s.name}'의 z 위치(${fmt(it.bb.z0)} ~ ${fmt(it.bb.z1)})나 재질이 약속한 층과 맞지 않습니다. (아직 Subtract 안 한 도구라면 무시)`]);
     (A.extraRep || []).forEach(x => rep.push(x));
-    A.port.issues.forEach(t => rep.push([A.port.q < 0.84 ? 'err' : 'warn', '포트: ' + t]));
-    if (S.monitors.length < 9) rep.push(['warn', 'Farfield 모니터가 15–19 GHz, 0.5 간격(9개)보다 적습니다.']);
-    const allOk = q >= 0.95 && A.port.q >= 0.84 && A.subOk && A.coaxOk;
+    if (!pj.array) A.port.issues.forEach(t => rep.push([A.port.q < 0.84 ? 'err' : 'warn', '포트: ' + t]));
+    if (!pj.array && S.monitors.length < 9) rep.push(['warn', 'Farfield 모니터가 15–19 GHz, 0.5 간격(9개)보다 적습니다.']);
+    if (pj.array && !S.monitors.some(f => Math.abs(f - 16.5) < 1e-6)) rep.push(['warn', '16.5 GHz Farfield 모니터가 없습니다.']);
+    const allOk = q >= 0.95 && A.portOk && A.subOk && A.coaxOk;
     if (allOk) rep.unshift(['ok', '형상이 과제 도면과 일치합니다. 실제 CST에서 같은 순서로 만들면 됩니다.']);
-    return { gradeOnly: true, rep, q, allOk };
+    return { gradeOnly: true, rep, q, allOk, exc: A.exc || [] };
   }
   for (const it of A.items) if (['metal-other', 'diel-other'].includes(it.cat)) rep.push(['warn', `'${it.s.name}'의 z 위치(${fmt(it.bb.z0)} ~ ${fmt(it.bb.z1)})가 약속한 면과 맞지 않아 비교에서 제외했습니다.`]);
   if (baseQ != null) q = Math.max(q, baseQ);

@@ -108,4 +108,5 @@
       return rep;
     }
   };
+  window.TPGEO = { radParts, parParts, vias, sq, C, T, fx, fy, B2, rotTbl };
 })();

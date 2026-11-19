@@ -31,16 +31,19 @@ function leafPath(x, l) {
   if (l.t === 'brick') { l.pts.forEach((p, i) => i ? x.lineTo(p[0], p[1]) : x.moveTo(p[0], p[1])); x.closePath(); }
   else { x.arc(l.c[0], l.c[1], l.ro, 0, 2 * PI); if (l.ri > 0) { x.moveTo(l.c[0] + l.ri, l.c[1]); x.arc(l.c[0], l.c[1], l.ri, 0, 2 * PI, true); } }
 }
+let CLIP = null; // 이 도형이 차지하는 화면 영역 (z = 0 기준)
+function dImg(ctx, src, dy) { if (!CLIP) return ctx.drawImage(src, 0, dy || 0); const r = CLIP; ctx.drawImage(src, r.x, r.y, r.w, r.h, r.x, r.y + (dy || 0), r.w, r.h); }
 function renderInto(x, en, op, t) {
   if (en.t !== 'grp') { x.globalCompositeOperation = op; leafPath(x, en); x.fillStyle = '#000'; x.fill('evenodd'); return; }
   const c2 = oc(), x2 = c2.getContext('2d'); x2.setTransform(...t.m);
   en.items.forEach(it => renderInto(x2, it.n, it.s > 0 ? 'source-over' : 'destination-out', t));
-  x.save(); x.setTransform(1, 0, 0, 1, 0, 0); x.globalCompositeOperation = op; x.drawImage(c2, 0, 0); x.restore();
+  x.save(); x.setTransform(1, 0, 0, 1, 0, 0); x.globalCompositeOperation = op; dImg(x, c2, 0); x.restore();
 }
-function tinted(mask, color) { const o = oc(), x = o.getContext('2d'); x.drawImage(mask, 0, 0); x.globalCompositeOperation = 'source-in'; x.fillStyle = color; x.fillRect(0, 0, o.width, o.height); return o; }
+function tinted(mask, color) { const o = oc(), x = o.getContext('2d'); dImg(x, mask, 0); x.globalCompositeOperation = 'source-in'; x.fillStyle = color; if (CLIP) x.fillRect(CLIP.x, CLIP.y, CLIP.w, CLIP.h); else x.fillRect(0, 0, o.width, o.height); return o; }
 function shade(hex, k) { const n = parseInt(hex.slice(1), 16); const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255; return `rgb(${Math.round(r * k)},${Math.round(g * k)},${Math.round(b * k)})`; }
 
-let lastItems = [];
+let lastItems = [], drawPending = false;
+function drawSoon() { if (drawPending) return; drawPending = true; requestAnimationFrame(() => { drawPending = false; draw(); }); }
 function draw() {
   const c = cv(); if (!c || !S) return;
   const ctx = c.getContext('2d'); ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -66,6 +69,13 @@ function draw() {
   ctx.fillText(U.view === 'iso' ? '3D (드래그: 회전, Shift+드래그: 이동, 휠: 확대)' : U.view === 'top' ? 'Front: +z에서 내려다본 모습 (윗면)' : 'Back: −z에서 올려다본 모습 (아랫면, 좌우 반전)', 10 * U.dpr, c.height - 10 * U.dpr);
 }
 function drawSolid(ctx, t, it, sel) {
+  const W = cv().width, Hh = cv().height, b = it.bb;
+  const cs = [[b.x0, b.y0], [b.x1, b.y0], [b.x0, b.y1], [b.x1, b.y1]].map(([x, y]) => proj(t, x, y, 0));
+  let x0 = Math.floor(Math.min(...cs.map(c => c[0]))) - 3, x1 = Math.ceil(Math.max(...cs.map(c => c[0]))) + 3, y0 = Math.floor(Math.min(...cs.map(c => c[1]))) - 3, y1 = Math.ceil(Math.max(...cs.map(c => c[1]))) + 3;
+  const top0 = y0 - Math.ceil(t.zk * Math.max(b.z1, 0)) - 2, bot0 = y1 + Math.ceil(t.zk * Math.max(-b.z0, 0)) + 2;
+  if (x1 < 0 || x0 > W || bot0 < 0 || top0 > Hh) return;
+  x0 = clamp(x0, 0, W); x1 = clamp(x1, 0, W); y0 = clamp(y0, 0, Hh); y1 = clamp(y1, 0, Hh);
+  CLIP = x1 > x0 && y1 > y0 ? { x: x0, y: y0, w: x1 - x0, h: y1 - y0 } : null;
   const m = getMat(it.s.mat), mask = oc(), mx = mask.getContext('2d'); mx.setTransform(...t.m);
   renderInto(mx, it.en, 'source-over', t);
   const isD = m.kind === 'diel';
@@ -74,11 +84,14 @@ function drawSolid(ctx, t, it, sel) {
   const layer = oc(), lx = layer.getContext('2d');
   if (t.zk > 0) {
     const side = tinted(mask, shade(m.color, 0.72)), z0 = it.bb.z0, z1 = it.bb.z1, n = Math.min(400, Math.max(1, Math.ceil((z1 - z0) * t.zk)));
-    if (z1 - z0 > 1e-9) for (let i = 0; i <= n; i++) lx.drawImage(side, 0, -t.zk * (z0 + (z1 - z0) * i / n));
-    lx.drawImage(top, 0, -t.zk * z1);
-  } else lx.drawImage(top, 0, 0);
-  if (sel) { const o = tinted(mask, '#ff8c1a'); lx.globalAlpha = 0.55; lx.drawImage(o, 0, -t.zk * it.bb.z1); lx.globalAlpha = 1; }
-  ctx.globalAlpha = alpha; ctx.drawImage(layer, 0, 0); ctx.globalAlpha = 1;
+    if (z1 - z0 > 1e-9) for (let i = 0; i <= n; i++) dImg(lx, side, -t.zk * (z0 + (z1 - z0) * i / n));
+    dImg(lx, top, -t.zk * z1);
+  } else dImg(lx, top, 0);
+  if (sel) { const o = tinted(mask, '#ff8c1a'); lx.globalAlpha = 0.55; dImg(lx, o, -t.zk * it.bb.z1); lx.globalAlpha = 1; }
+  const cl = CLIP; CLIP = null;
+  ctx.globalAlpha = alpha;
+  if (cl) { const ya = clamp(top0, 0, Hh), yb = clamp(bot0, 0, Hh); if (yb > ya) ctx.drawImage(layer, cl.x, ya, cl.w, yb - ya, cl.x, ya, cl.w, yb - ya); } else ctx.drawImage(layer, 0, 0);
+  ctx.globalAlpha = 1;
   outline(ctx, t, it.en, sel ? '#ff6a00' : 'rgba(25,25,25,.45)', sel ? 2 : 1);
 }
 function outline(ctx, t, en, color, w, dash) {
@@ -223,7 +236,7 @@ function initMouse() {
     if (Math.abs(dx) + Math.abs(dy) > 3) down.moved = true; if (!down.moved) return;
     if (U.view === 'iso' && !down.shift) { U.az = down.az - dx * 0.4; U.el = clamp(down.el + dy * 0.3, 5, 90); }
     else { U.ox = down.ox + dx * U.dpr; U.oy = down.oy + dy * U.dpr; }
-    draw();
+    drawSoon();
   });
   window.addEventListener('mouseup', e => {
     if (!down) return; const d = down; down = null; if (d.moved || e.target !== c) return;
@@ -238,6 +251,6 @@ function initMouse() {
   });
   c.addEventListener('wheel', e => {
     e.preventDefault(); const r = c.getBoundingClientRect(), mx = (e.clientX - r.left) * U.dpr, my = (e.clientY - r.top) * U.dpr, k = e.deltaY < 0 ? 1.15 : 1 / 1.15;
-    U.ox = mx - (mx - U.ox) * k; U.oy = my - (my - U.oy) * k; U.zoom *= k; draw();
+    U.ox = mx - (mx - U.ox) * k; U.oy = my - (my - U.oy) * k; U.zoom *= k; drawSoon();
   }, { passive: false });
 }

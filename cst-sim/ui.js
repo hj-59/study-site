@@ -64,7 +64,7 @@ function action(a) {
   switch (a) {
     case 'brick': case 'cyl': U.mode = 'awaitEsc'; U.awaitKind = a; setHint(`<b>${a === 'brick' ? 'Brick' : 'Cylinder'}</b>: 작업창에서 점을 찍는 대신 <kbd>Esc</kbd>를 누르면 좌표 입력창이 열립니다. <button class="chip" id="escChip">Esc 누르기</button>`); break;
     case 'boolAdd': case 'boolSub': startBool(a === 'boolAdd' ? 'add' : 'sub'); break;
-    case 'transform': if (!U.sel.length) return msg('warn', 'Transform할 객체를 먼저 트리나 화면에서 선택하세요.'); dlgTransform(); break;
+    case 'transform': if (!U.sel.length && !U.selPorts.length) return msg('warn', 'Transform할 객체(또는 트리의 포트)를 먼저 선택하세요.'); dlgTransform(); break;
     case 'delete': if (!U.sel.length) return msg('warn', '삭제할 객체를 선택하세요.'); modify(() => { S.solids = S.solids.filter(s => !U.sel.includes(s.id)); U.sel = []; }); break;
     case 'pickEdge': U.mode = 'pickEdge'; if (U.view === 'iso') { setView('top'); msg('info', 'Pick을 위해 Front 보기로 바꿨습니다. 아랫면 모서리는 View → Back에서 Pick 하세요.'); } setHint('<b>Pick Edge</b>: 포트를 붙일 금속 모서리를 클릭하세요. 취소: <kbd>Esc</kbd>'); renderRibbon(); break;
     case 'clearPicks': U.pick = null; U.mode = null; setHint(''); draw(); renderRibbon(); break;
@@ -185,14 +185,14 @@ function dlgCyl(st) {
 
 /* ---------- Transform ---------- */
 function dlgTransform() {
-  const names = selSolids().map(s => s.name).join(', ');
+  const names = [...selSolids().map(s => s.name), ...U.selPorts.map(i => 'port' + (i + 1))].join(', ');
   openDlg('Transform Selected Object', `<p class="hint">대상: <b>${esc(names)}</b></p>
   <div class="g2"><label class="full">Operation<span class="radio" id="t_op"><label><input type="radio" name="op" value="tr" checked>Translate</label><label><input type="radio" name="op" value="rot">Rotate</label><label><input type="radio" name="op" value="mir">Mirror</label></span></label>
   <label class="chk"><input type="checkbox" id="t_copy" checked> Copy (원래 객체 유지)</label><label class="chk"><input type="checkbox" id="t_unite"> Unite (복사본과 합치기)</label>
   <label>Repetition factor<input id="t_rep" value="1"></label><span></span></div>
   <fieldset id="fs_tr"><legend>Translation vector</legend><div class="g3"><label>X<input id="t_vx" value="0"></label><label>Y<input id="t_vy" value="0"></label><label>Z<input id="t_vz" value="0"></label></div></fieldset>
   <fieldset id="fs_rot" hidden><legend>Rotation (Z축)</legend><div class="g3"><label>Angle (deg)<input id="t_ang" value="90"></label><label>Center X<input id="t_cx" value="0"></label><label>Center Y<input id="t_cy" value="0"></label></div><p class="hint">연습판은 Z축 회전만 지원합니다. 양수 = 반시계 방향.</p></fieldset>
-  <fieldset id="fs_mir" hidden><legend>Mirror plane</legend><div class="g3"><label>Normal<select id="t_mn"><option value="x">X (좌우 대칭)</option><option value="y">Y (위아래 대칭)</option></select></label><label>Center<input id="t_mc" value="0"></label></div></fieldset>`,
+  <fieldset id="fs_mir" hidden><legend>Mirror plane (대칭면의 법선 벡터, Z = 0)</legend><div class="g2"><label>Normal X<input id="t_nx" value="1"></label><label>Normal Y<input id="t_ny" value="0"></label><label>Center X<input id="t_mcx" value="0"></label><label>Center Y<input id="t_mcy" value="0"></label></div><p class="hint">Normal (1, 0) = 좌우 대칭, (0, 1) = 위아래 대칭, (1, 1) = 대각선(y = −x 선) 기준 대칭.</p></fieldset>${U.selPorts.length ? '<p class="hint">포트는 Translate만 지원합니다.</p>' : ''}`,
     [{ label: 'OK', primary: true, fn: () => ok(false) }, { label: 'Preview', fn: () => ok(true) }, { label: 'Cancel', fn: closeDlg }], true);
   document.querySelectorAll('input[name=op]').forEach(r => r.onchange = () => { const v = document.querySelector('input[name=op]:checked').value; ['tr', 'rot', 'mir'].forEach(k => $('#fs_' + k).hidden = k !== v); if (v === 'rot') $('#t_copy').checked = false; });
   function ok(prev) {
@@ -201,10 +201,20 @@ function dlgTransform() {
     let tf;
     if (op === 'tr') { if (!checkExpr([['X', fv('t_vx')], ['Y', fv('t_vy')], ['Z', fv('t_vz')]])) return; tf = { k: 'tr', v: [fv('t_vx'), fv('t_vy'), fv('t_vz')] }; }
     if (op === 'rot') { if (!checkExpr([['Angle', fv('t_ang')], ['Center X', fv('t_cx')], ['Center Y', fv('t_cy')]])) return; tf = { k: 'rot', a: fv('t_ang'), c: [fv('t_cx'), fv('t_cy')] }; }
-    if (op === 'mir') { if (!checkExpr([['Center', fv('t_mc')]])) return; tf = { k: 'mir', ax: fv('t_mn'), c: fv('t_mc') }; }
-    if (prev) { const s = selSolids()[0]; const n = JSON.parse(JSON.stringify(s.node)); applyTf(n, { ...tf, n: 1 }); U.preview = n; draw(); return; }
+    if (op === 'mir') { if (!checkExpr([['Normal X', fv('t_nx')], ['Normal Y', fv('t_ny')], ['Center X', fv('t_mcx')], ['Center Y', fv('t_mcy')]])) return; tf = { k: 'mir', nv: [fv('t_nx'), fv('t_ny')], c: [fv('t_mcx'), fv('t_mcy')] }; }
+    if (U.selPorts.length && op !== 'tr') return dErr('포트는 Translate만 할 수 있습니다.');
+    if (prev) { const s = selSolids()[0]; if (!s) return; const n = JSON.parse(JSON.stringify(s.node)); applyTf(n, { ...tf, n: 1 }); U.preview = n; draw(); return; }
     closeDlg();
     modify(() => {
+      if (U.selPorts.length) {
+        const sh = (e, d, k) => d === '0' || d === '' ? e : `(${e})+(${d})*${k}`;
+        const move = (pt, k) => { const o = { x: tf.v[0], y: tf.v[1], z: tf.v[2] }, [ua, va] = inPlane(pt.normal); return { ...pt, pos: sh(pt.pos, o[pt.normal], k), u: pt.u.map(e => sh(e, o[ua], k)), v: pt.v.map(e => sh(e, o[va], k)) }; };
+        const src = U.selPorts.map(i => S.ports[i]);
+        if (!copy) U.selPorts.forEach(i => { S.ports[i] = move(S.ports[i], 1); });
+        else for (let k = 1; k <= rep; k++) src.forEach(pt => S.ports.push(move(pt, k)));
+        msg('info', `포트 ${src.length}개 ${copy ? '복사 ×' + rep : '이동'} → 포트 ${S.ports.length}개`);
+        U.selPorts = [];
+      }
       for (const s of selSolids()) {
         if (!copy) { applyTf(s.node, { ...tf, n: 1 }); continue; }
         const copies = [];
@@ -290,8 +300,26 @@ function dlgPort(editIdx) {
   }
 }
 function dlgSolver() {
-  openDlg('Time Domain Solver Parameters', `<div class="g2"><label>Accuracy<select><option>-40 dB</option><option>-30 dB</option></select></label><label>Source type<select><option>All Ports</option><option>Port 1</option></select></label><label class="chk full"><input type="checkbox" checked disabled> S-parameter normalization (50 Ω)</label></div><p class="hint">Start를 누르면 모의 계산을 시작합니다.</p>`,
+  openDlg('Time Domain Solver Parameters', `<div class="g2"><label>Accuracy<select><option>-40 dB</option><option>-30 dB</option></select></label><label>Source type<select><option>All Ports</option><option>Port 1</option></select></label><label class="chk full"><input type="checkbox" checked disabled> S-parameter normalization (50 Ω)</label></div><p class="hint">Start를 누르면 모의 계산을 시작합니다.</p><p>Excitation settings: <button class="btn sm" id="excBtn">Excitation List…</button> ${(S.exc || []).length ? `(${S.exc.length}개: ${S.exc.map(e => esc(e.name)).join(', ')})` : ''}</p>`,
     [{ label: 'Start', primary: true, fn: () => { closeDlg(); startSim(); } }, { label: 'Close', fn: closeDlg }]);
+  $('#excBtn').onclick = () => dlgExc();
+}
+function dlgExc() {
+  if (S.ports.length < 2) return dErr('포트가 2개 이상 있어야 Simultaneous excitation을 만듭니다.');
+  const list = (S.exc || []).map((e, i) => `<div>${i + 1}. <b>${esc(e.name)}</b> <button class="lnk" data-edel="${i}">삭제</button></div>`).join('') || '<i>아직 없습니다.</i>';
+  openDlg('Excitation List – Simultaneous (Combine Excitation)', `<p class="hint">체크한 포트를 동시에 급전합니다. Phase shift에 숫자나 파라미터 수식(<code>2*p15</code>)을 넣을 수 있습니다. Offset: Phase shift, Phase reference frequency 16.5.</p>
+   <label>Label<input id="ex_name" value="Steer${(S.exc || []).length ? '' : '0'}"></label>
+   <div class="tbl"><table class="ptab2"><tr><th>✓</th><th>Excitation</th><th>Amplitude</th><th>Phase shift (deg)</th><th>위치 (x, y)</th></tr>${S.ports.map((pt, i) => { let c = ''; try { const b = portBox(pt, curP()); c = `${fmt((b.u0 + b.u1) / 2, 2)}, ${fmt((b.v0 + b.v1) / 2, 2)}`; } catch (e) { } return `<tr><td><input type="checkbox" id="ex_on${i}" checked></td><td>Port ${i + 1}</td><td>1.0</td><td><input id="ex_ph${i}" value="0" spellcheck="false"></td><td>${c}</td></tr>`; }).join('')}</table></div>
+   <div class="tlist">저장된 조합:<br>${list}</div>`,
+    [{ label: 'Add Combination', primary: true, fn: add }, { label: 'Close', fn: closeDlg }], true);
+  $('#modal').querySelectorAll('[data-edel]').forEach(b => b.onclick = () => { S.exc.splice(+b.dataset.edel, 1); save(); renderTree(); dlgExc(); clearTimeout(anTimer); lastA = analyze(); renderMission(); });
+  function add() {
+    const name = fv('ex_name') || 'Excitation'; const ph = S.ports.map((_, i) => fv('ex_ph' + i) || '0'), on = S.ports.map((_, i) => $('#ex_on' + i).checked);
+    if (!checkExpr(ph.map((v, i) => ['Port ' + (i + 1), v]))) return;
+    S.exc = S.exc || []; const ex = S.exc.findIndex(e => e.name === name); const e = { name, ph, on };
+    if (ex >= 0) S.exc[ex] = e; else S.exc.push(e);
+    save(); renderTree(); msg('info', `Excitation "${name}" 저장 (${on.filter(Boolean).length}개 포트).`); clearTimeout(anTimer); lastA = analyze(); renderMission(); dlgExc();
+  }
 }
 function dlgGMesh() {
   openDlg('Mesh Properties – Hexahedral', `<div class="g2"><label>Cells per wavelength<input id="gm_a" value="${S.gmesh.cpw}"></label><label>Cells per max model box edge<input id="gm_b" value="${S.gmesh.cpe}"></label></div><p class="hint">값을 올리면 메쉬가 촘촘해집니다. 10 미만이면 정확도가 떨어집니다.</p>`,
@@ -320,6 +348,7 @@ function startSim() {
         S.ran = true; save();
         msg(r.allOk ? 'ok' : 'warn', '<b>형상 점검 결과</b> (이 예제는 결과 그래프 없이 형상만 채점합니다. S11·AR·패턴은 실제 CST에서 확인하세요.)');
         r.rep.forEach(([ty, tx]) => msg(ty, tx));
+        if (PJ().array) { S.af = r.exc.filter(x => x.ok); save(); renderTree(); if (S.af.length) openResult('af'); else msg('warn', '조향 결과를 보려면 Excitation List에 위상 조합을 저장하세요.'); }
         clearTimeout(anTimer); lastA = analyze(); renderMission(); return;
       }
       S.results = { s11: r.s11, gain: r.gain, ar: r.ar, mons: r.mons, lossless: r.lossless, f: r.f, d: r.d }; S.sweep = null;
@@ -368,6 +397,7 @@ function tabLabel(id) {
   if (id === 'sweep') return 'S1,1 (Par. Sweep)';
   if (id.startsWith('tpl')) { const t = S.tpls[+id.slice(3)]; return t ? 'Tables\\' + t.q : '?'; }
   if (id.startsWith('ff')) return 'farfield (f=' + id.slice(2) + ')';
+  if (id === 'af') return '배열인자 패턴 (phi = 0°, 16.5 GHz)';
   return id;
 }
 function renderTabs() {
@@ -377,6 +407,7 @@ function renderTabs() {
   if (U.tab === '3D') draw(); else renderResult();
 }
 function resultExists(id) {
+  if (id === 'af') return !!(S.af && S.af.length);
   if (!S.results) return false;
   if (id === 'sweep') return !!S.sweep;
   if (id.startsWith('tpl')) return !!S.tpls[+id.slice(3)];
@@ -391,6 +422,7 @@ document.addEventListener('click', e => {
 let chartCfg = null;
 function renderResult() {
   const pane = $('#resPane'), R = S.results, pj = PJ(), id = U.tab;
+  if (id === 'af') return renderAF(pane);
   if (!R) return;
   const banner = `<div class="simnote">연습용 모의 결과 · 실제 CST 계산이 아니라 교안 결과 곡선을 형상 일치도에 맞춰 변형한 근사입니다.</div>`;
   if (id.startsWith('ff')) {
@@ -432,6 +464,24 @@ function renderResult() {
   c.onmousemove = e => { const r = c.getBoundingClientRect(); drawLineChart(c, cfg, (e.clientX - r.left) * U.dpr); };
   c.onmouseleave = () => drawLineChart(c, cfg, null);
 }
+function renderAF(pane) {
+  const A = PJ().array, KD = A.KD;
+  pane.innerHTML = `<div class="simnote">배열인자(AF) × 소자 패턴(cos θ) 근사 · 실제 CST 결과 아님. 배열인자만 보면 최대점이 정확히 0°/15°/30°지만, 소자 패턴을 곱하면 정면 쪽으로 조금 당겨집니다. 실제 CST에서도 비슷하게 어긋나면 p를 조금 더 음수로 조절하세요 (교안: −90° → −97°).</div><canvas id="rc"></canvas>`;
+  const series = S.af.map(x => {
+    const pts = []; let best = [0, -1e9];
+    for (let th = -90; th <= 90; th += 0.25) {
+      const sn = Math.sin(th * D2R); let re = 0, im = 0;
+      for (let c = 0; c < 5; c++) { const ps = (KD * c * sn + x.colPh[c]) * D2R; re += 2 * Math.cos(ps); im += 2 * Math.sin(ps); }
+      const v = 20 * Math.log10(Math.max(Math.hypot(re, im) / 10, 1e-4) * Math.max(Math.cos(th * D2R), 1e-3));
+      pts.push([th, Math.max(v, -40)]); if (v > best[1]) best = [th, v];
+    }
+    return { name: `${x.name}: 최대 ${best[0].toFixed(1)}°`, pts };
+  });
+  const c = sizeRc(), cfg = { title: 'Normalized pattern from array factor, phi = 0° cut (x–z plane)', xl: 'Theta / deg', yl: 'dB (normalized)', series, xr: [-90, 90], yr: [-40, 2], hlines: [{ y: -3, label: '-3 dB' }] };
+  drawLineChart(c, cfg, null);
+  c.onmousemove = e => { const r = c.getBoundingClientRect(); drawLineChart(c, cfg, (e.clientX - r.left) * U.dpr); };
+  c.onmouseleave = () => drawLineChart(c, cfg, null);
+}
 function sizeRc() { const c = $('#rc'), p = $('#resPane'); const used = [...p.children].filter(ch => ch !== c && getComputedStyle(ch).position !== 'absolute').reduce((a, ch) => a + ch.offsetHeight, 0); const w = p.clientWidth, h = Math.max(200, p.clientHeight - used - 2); c.width = w * U.dpr; c.height = h * U.dpr; c.style.width = w + 'px'; c.style.height = h + 'px'; return c; }
 
 /* ---------- 네비게이션 트리 ---------- */
@@ -450,9 +500,10 @@ function renderTree() {
   $('#tree').innerHTML = '<ul>' + [
     node('comp', 'Components', compNodes),
     node('mats', 'Materials', S.mats.map(n => node('m:' + n, esc(n), null, { icon: sw(getMat(n).color) }))),
-    node('ports', 'Ports', S.ports.map((p, i) => node('p:' + i, 'port' + (i + 1), null, { attr: `data-port="${i}"` }))),
+    node('ports', 'Ports', S.ports.map((p, i) => node('p:' + i, 'port' + (i + 1), null, { attr: `data-port="${i}"`, sel: U.selPorts.includes(i) }))),
+    ...(S.exc && S.exc.length ? [node('exc', 'Excitation Signals', S.exc.map(e => node('e:' + e.name, esc(e.name), null)))] : []),
     node('mon', 'Field Monitors', S.monitors.map(f => node('f:' + f, `farfield (f=${f})`, null, { attr: `data-mon="${f}"` }))),
-    node('res', '1D Results', res),
+    node('res', '1D Results', res.concat(S.af && S.af.length ? [node('r:af', '배열인자 패턴 (phi = 0°)', null, { attr: 'data-r="af"' })] : [])),
     node('tbl', 'Tables', tbl.length ? [node('tbl1', '1D Results', tbl)] : []),
     node('ff', 'Farfields', ffs)
   ].join('') + '</ul>';
@@ -465,6 +516,10 @@ document.addEventListener('click', e => {
     if (U.mode === 'bool') { boolTarget(id); return; }
     if (e.ctrlKey || e.metaKey || e.shiftKey) U.sel = U.sel.includes(id) ? U.sel.filter(i => i !== id) : [...U.sel, id]; else U.sel = [id];
     renderTree(); if (U.tab !== '3D') { U.tab = '3D'; renderTabs(); } else draw();
+  } else if (tn.dataset.port) {
+    const i = +tn.dataset.port;
+    if (e.ctrlKey || e.metaKey || e.shiftKey) U.selPorts = U.selPorts.includes(i) ? U.selPorts.filter(q => q !== i) : [...U.selPorts, i]; else { U.selPorts = [i]; U.sel = []; }
+    renderTree(); draw();
   } else if (tn.dataset.r) openResult(tn.dataset.r);
 });
 document.addEventListener('dblclick', e => {
@@ -558,7 +613,7 @@ document.addEventListener('keydown', e => {
 });
 
 /* ---------- 정답 모델 (교안 순서) ---------- */
-function buildAnswer() {
+function buildAnswer(startOnly) {
   const pj = PJ(); S = blankState(pj.key);
   S.params = pj.params.map(([n, v, d]) => ({ name: n, expr: String(v), desc: d })); S.freq = pj.freq.slice();
   const add = (name, mat, e) => { const id = 's' + S.nextId++; S.solids.push({ id, name, comp: 'component1', mat, node: { t: 'brick', e: { x0: e[0], x1: e[1], y0: e[2], y1: e[3], z0: e[4], z1: e[5] }, tf: [] } }); return S.solids[S.solids.length - 1]; };
@@ -589,7 +644,7 @@ function buildAnswer() {
     const m1 = add('MS1', 'PEC', ['-g/2', '-g/2+lm1', '-wm1/2', 'wm1/2', '-t', '-t']), m2 = add('MS2', 'PEC', ['-g/2+lm1', '-g/2+lm1+lm2', '-wm2/2', 'wm2/2', '-t', '-t']); unite(m1, m2);
     S.ports.push({ normal: 'x', dir: 1, pos: '-g/2', u: ['-wm1/2', 'wm1/2'], ue: ['5*t', '5*t'], v: ['-t', '-t'], ve: ['5*t', 't'] });
     for (let x = 2; x <= 3.8 + 1e-9; x += 0.1) S.monitors.push(+x.toFixed(4));
-  } else if (pj.key === 'tp') {
+  } else if (pj.key === 'tp' || pj.key === 'tp2') {
     S.freq = [14, 20]; S.mats.push('Taconic TLY-5 (lossy)', 'PTFE (lossy)');
     const T = 'Taconic TLY-5 (lossy)';
     add('Sub_Lower', T, ['-Wsub/2', 'Wsub/2', '-Wsub/2', 'Wsub/2', '0', 'h']); add('Sub_Upper', T, ['-Wsub/2', 'Wsub/2', '-Wsub/2', 'Wsub/2', 'h', '2*h']);
@@ -613,6 +668,19 @@ function buildAnswer() {
     col.forEach((v, i) => copy(v, { k: 'tr', v: ['12*via_p', '0', '0'] }, 1, 'ViaR_' + i));
     S.ports.push({ normal: 'z', dir: 1, pos: '-lc', u: ['fx-r_o', 'fx+r_o'], ue: ['0', '0'], v: ['fy-r_o', 'fy+r_o'], ve: ['0', '0'] });
     for (let x = 15; x <= 19 + 1e-9; x += 0.5) S.monitors.push(+x.toFixed(4));
+    if (pj.key === 'tp2' && !startOnly) {
+      const vs = S.solids.filter(q => /^Via/.test(q.name)); unite(vs[0], ...vs.slice(1)); vs[0].name = 'VVG';
+      for (const s2 of [rad, par]) applyTf(s2.node, { k: 'mir', nv: ['1', '1'], c: ['0', '0'], n: 1 });
+      const base = S.solids.slice();
+      base.forEach(s0 => { for (let k = 1; k <= 4; k++) copy(s0, { k: 'tr', v: ['Wsub', '0', '0'] }, k, s0.name + '_' + k); });
+      S.solids.slice().forEach(s0 => copy(s0, { k: 'tr', v: ['0', 'Wsub', '0'] }, 1, s0.name + '_r2'));
+      const sh = (e, d, k) => `(${e})+(${d})*${k}`, mv = (pt, dx, dy, k) => ({ ...pt, u: pt.u.map(e => dx ? sh(e, dx, k) : e), v: pt.v.map(e => dy ? sh(e, dy, k) : e) });
+      const p0 = S.ports[0]; for (let k = 1; k <= 4; k++) S.ports.push(mv(p0, 'Wsub', 0, k));
+      S.ports.slice(0, 5).forEach(pt => S.ports.push(mv(pt, 0, 'Wsub', 1)));
+      S.params.push({ name: 'p15', expr: '-360*Wsub*16.5/299.792458*sin(15*pi/180)', desc: '15° 조향 열 간 위상' }, { name: 'p30', expr: '-360*Wsub*16.5/299.792458*sin(30*pi/180)', desc: '30° 조향 열 간 위상' });
+      const ex = (name, pv) => ({ name, ph: S.ports.map((_, i) => { const c = i % 5; return pv && c ? `${c}*${pv}` : '0'; }), on: S.ports.map(() => true) });
+      S.exc = [ex('Steer0', null), ex('Steer15', 'p15'), ex('Steer30', 'p30')];
+    }
     U.sel = []; return;
   } else {
     S.mats.push('FR-4 (lossy)');
@@ -641,7 +709,9 @@ function projectPicker(first) {
   $('#modal').querySelectorAll('[data-reset]').forEach(b => b.onclick = () => { closeDlg(); openProject(b.dataset.reset, true); });
 }
 function openProject(key, reset) {
-  S = (!reset && loadSaved(key)) || blankState(key); undoStack = [];
+  const saved = !reset && loadSaved(key);
+  S = saved || blankState(key); undoStack = [];
+  if (!saved && key === 'tp2') { buildAnswer(true); S.proj = 'tp2'; }
   if (!S.custom) S.custom = {};
   U.sel = []; U.pick = null; U.mode = null; U.tabs = []; U.tab = '3D'; U.openStep = -1; U.missionTab = 'steps'; U.view = 'iso'; U.az = PJ().view.az; U.el = PJ().view.el; U.ffCut = null;
   setHint(''); $('#msglist').innerHTML = ''; $('#ttl').textContent = `${PJ().file} - CST Studio Suite 2025 - [Learning Edition]`;
