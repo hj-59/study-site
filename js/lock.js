@@ -48,6 +48,17 @@
   async function unlock() {
     const payload = JSON.parse(new TextDecoder().decode(await fetchEnc("data.enc")));
     files = payload.files || {};
+    const courses = (payload.data.semesters || []).flatMap(semester => semester.subjects || []);
+    const feedbackCourse = courses.find(subject => /전자회로\s*(?:2|Ⅱ|II)/i.test(subject.name)) ||
+      courses.find(subject => subject.name.trim() === "전자회로");
+    if (feedbackCourse) {
+      const notePath = "notes/feedback-part3.md";
+      files[notePath] = "f/feedback-part3.bin";
+      feedbackCourse.aiNotes ||= [];
+      if (!feedbackCourse.aiNotes.some(note => note.file === notePath)) {
+        feedbackCourse.aiNotes.push({ title: "Feedback Part 3 · 네 가지 피드백 회로", file: notePath });
+      }
+    }
     window.STUDY_DATA = payload.data;
     const s = document.createElement("script");
     s.src = "js/app.js";
