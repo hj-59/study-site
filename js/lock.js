@@ -63,6 +63,13 @@
       if (!feedbackCourse.aiNotes.some(note => note.file === part4Path)) {
         feedbackCourse.aiNotes.push({ title: "Feedback Part 4 · 로딩 효과와 루프 끊기", file: part4Path });
       }
+      for (const [part, title] of [[5, "안정도와 위상여유"], [6, "주파수 보상과 안정도 계산"]]) {
+        const file = `notes/feedback-part${part}.md`;
+        files[file] = `f/feedback-part${part}.bin`;
+        if (!feedbackCourse.aiNotes.some(note => note.file === file)) {
+          feedbackCourse.aiNotes.push({ title: `Feedback Part ${part} · ${title}`, file });
+        }
+      }
       const slidePath = "pdfs/2026-2/electronic-circuits2/feedback_part3_slides.pdf";
       files[slidePath] = "f/b54f862d7684741c18.bin";
       feedbackCourse.lectures ||= [];
