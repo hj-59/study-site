@@ -58,6 +58,12 @@
       if (!feedbackCourse.aiNotes.some(note => note.file === notePath)) {
         feedbackCourse.aiNotes.push({ title: "Feedback Part 3 · 네 가지 피드백 회로", file: notePath });
       }
+      const slidePath = "pdfs/2026-2/electronic-circuits2/feedback_part3_slides.pdf";
+      files[slidePath] = "f/b54f862d7684741c18.bin";
+      feedbackCourse.lectures ||= [];
+      if (!feedbackCourse.lectures.some(item => item.file === slidePath)) {
+        feedbackCourse.lectures.push({ title: "Feedback Part 3 · 강의 슬라이드 (43쪽)", file: slidePath });
+      }
     }
     window.STUDY_DATA = payload.data;
     const s = document.createElement("script");
