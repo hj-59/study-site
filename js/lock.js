@@ -58,6 +58,11 @@
       if (!feedbackCourse.aiNotes.some(note => note.file === notePath)) {
         feedbackCourse.aiNotes.push({ title: "Feedback Part 3 · 네 가지 피드백 회로", file: notePath });
       }
+      const part4Path = "notes/feedback-part4.md";
+      files[part4Path] = "f/feedback-part4.bin";
+      if (!feedbackCourse.aiNotes.some(note => note.file === part4Path)) {
+        feedbackCourse.aiNotes.push({ title: "Feedback Part 4 · 로딩 효과와 루프 끊기", file: part4Path });
+      }
       const slidePath = "pdfs/2026-2/electronic-circuits2/feedback_part3_slides.pdf";
       files[slidePath] = "f/b54f862d7684741c18.bin";
       feedbackCourse.lectures ||= [];
