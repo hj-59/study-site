@@ -22,6 +22,7 @@
 
   const TABS = [
     { id: "lectures", label: "교안", key: "lectures", type: "pdf" },
+    { id: "notes", label: "필기 교안", key: "profNotes", type: "md", optional: true }, // 자료가 있는 과목에만 표시
     { id: "ai", label: "AI용 교안", key: "aiNotes", type: "md" },
     { id: "solutions", label: "문제 풀이", key: "solutions", type: "problem" },
     { id: "predictions", label: "예상 문제", key: "predictions", type: "problem" },
@@ -265,7 +266,7 @@
     setCrumbs([{ label: "학기 선택", href: "#/" }, { label: sem.name, href: `#/${enc(sem.id)}` }, { label: sub.name }]);
     setTitle(`${sub.name} · ${tab.label}`);
 
-    const tabs = TABS.map((t) => {
+    const tabs = TABS.filter((t) => !t.optional || editing || items(sub, t.key).length).map((t) => {
       const n = items(sub, t.key).length;
       return `<a class="tab${t.id === tab.id ? " active" : ""}" href="${base}/${t.id}" role="tab" aria-selected="${t.id === tab.id}">${esc(t.label)}<span class="count">${n}</span></a>`;
     }).join("");
